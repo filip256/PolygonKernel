@@ -5,13 +5,12 @@
 #include <windows.h>
 
 #define NAN 32767
-#define INFINITE 10100
+#define INFINITE 101000
 #define WIN_WIDTH 1000
 #define WIN_HEIGHT 1000
 
 inline void pause(sf::RenderWindow& window)
 {
-	std::cout << "PAUSE\n";
 	while (window.isOpen())
 	{
 		sf::Event event;
@@ -151,6 +150,11 @@ namespace geo
 
 	static inline bool operator==(const Vertex& lhs, const Vertex& rhs) { return lhs.x == rhs.x && lhs.y == rhs.y; }
 	static inline bool operator!=(const Vertex& lhs, const Vertex& rhs) { return lhs.x != rhs.x || lhs.y != rhs.y; }
+
+	inline float crossProduct(const Vertex& v1, const Vertex& v2, const Vertex& v3)
+	{
+		return ((v2.x - v1.x) * (v3.y - v2.y) - (v3.x - v2.x) * (v2.y - v1.y));
+	}
 
 	class Equation
 	{
@@ -329,8 +333,8 @@ namespace geo
 		{}
 
 		Kernel(const Vertex& v1, const Vertex& v2, const Vertex& v3, const size_t expectedSize = 8) :
-			L(0),
-			F(2)
+			L(2),
+			F(0)
 		{
 			vertices.reserve(expectedSize);
 			vertices.push_back(v1);
@@ -348,6 +352,8 @@ namespace geo
 		inline const size_t indexOfF() const { return F; }
 		inline const size_t indexOfL() const { return L; }
 
+		inline void clear() { vertices.clear(); }
+
 		void addVertex(const Vertex& vertex)
 		{
 			vertices.push_back(vertex);
@@ -357,27 +363,20 @@ namespace geo
 			if (idx1 == idx2)
 				return;
 
-			std::cout << idx1 << " " << idx2 << '\n';
 			if (otherSide)
 			{
-				std::cout << "A\n";
+				//std::cout << "A\n";
 				vertices.insert(idx1 + 1, v1);
 				vertices.insert(idx2 + 2, v2);
 				vertices.erase(idx2 + 3, vertices.size());
 				vertices.erase(0, idx1 + 1);
-				F = idx2 + 1;
-				L = idx2;
 				return;
 			}
 
-			std::cout << "B\n";
+			//std::cout << "B\n";
 			vertices.insert(idx1 + 1, v1);
 			vertices.insert(idx2 + 2, v2);
 			vertices.erase(idx1 + 2, idx2 + 2);
-
-
-			F = idx1 + 2;
-			L = idx2;
 		}
 
 		void draw(sf::RenderWindow& window) const
@@ -405,6 +404,16 @@ namespace geo
 				vert[1].position = sf::Vector2f(vertices.back().x, vertices.back().y);
 				window.draw(vert, 2, sf::Lines);
 			}
+		}
+
+		bool isToTheLeftOf(const Vertex& v1, const Vertex& v2) const
+		{
+			for (size_t j = 0; j < vertices.size(); ++j)
+			{
+				if (crossProduct(v1, v2, vertices[j]) > 0)
+					return false;
+			}
+			return true;
 		}
 
 		Vertex& operator[](const long idx) { return vertices[idx]; }
@@ -442,15 +451,25 @@ namespace geo
 				return;
 			}
 
-			for (size_t i = 0; i < vertices.size() - 1; ++i)
+			for (int i = 0; i < vertices.size() - 1; ++i)
 			{
-				for (size_t j = i + 2; j < vertices.size() - 1; ++j)
+				for (int j = i + 2; j < vertices.size() - 1; ++j)
+				{
 					if (Equation::doIntersect(vertices[i], vertices[i + 1], vertices[j], vertices[j + 1]))
 					{
 						isValid = false;
 						return;
 					}
-				if (vertices.size() > 3 && Equation::doIntersect(vertices[i], vertices[i + 1], vertices[i - 1], vertices[i - 2]))
+				}
+				if (i > 1 && Equation::doIntersect(vertices[i], vertices[i + 1], vertices[i - 1], vertices[i - 2]))
+				{
+					isValid = false;
+					return;
+				}
+			}
+			for (int j = 1; j < vertices.size() - 2; ++j)
+			{
+				if (Equation::doIntersect(vertices.back(), vertices[0], vertices[j], vertices[j + 1]))
 				{
 					isValid = false;
 					return;
@@ -476,6 +495,8 @@ namespace geo
 		}
 
 	public:
+		bool wasNormalized = false;
+
 		void addVertex(const Vertex& vertex)
 		{
 			vertices.push_back(vertex);
@@ -513,16 +534,19 @@ namespace geo
 			vertices[idx].x = position.x;
 			vertices[idx].y = position.y;
 			checkValid();
+			isNormalized = false;
 		}
 
 		void normalize()
 		{
+			wasNormalized = false;
 			if (isNormalized)
 				return;
 			if (isClockwise())
 			{
 				for (size_t i = 0; i < vertices.size() / 2; ++i)
 					std::swap(vertices[i], vertices[vertices.size() - i - 1]);
+				wasNormalized = true;
 			}
 			isNormalized = true;
 		}
@@ -540,7 +564,6 @@ namespace geo
 			if (first == vertices.size()) // polygon is convex
 				return Kernel(vertices);
 
-			// - Lee & Preparata -
 			Kernel K(
 				Equation::toInfinite(vertices[first + 1], vertices[first]),
 				vertices[first],
@@ -549,40 +572,42 @@ namespace geo
 
 			for (size_t i = first + 1; vertices.mapIndex(i + 1) != first; ++i)
 			{
-				Equation E(vertices[i], vertices[i + 1]);
-
-				//if (crossProduct(vertices[i], vertices[i + 1], K.getF()) > 0)
-				//	continue;
-
-				Vertex W1, W2;
-				size_t j = 0, intIdx1 = 0, intIdx2 = 0;
-				while (j < K.size())
+				if (!K.isToTheLeftOf(vertices[i], vertices[i + 1]))
 				{
-					W1 = E.intersect(K[j], K[j + 1]);
-					if (W1 != Vertex::NullVertex)
-					{
-						intIdx1 = j;
-						break;
-					}
-					++j;
-				}
-				if (W1 == Vertex::NullVertex)
-					//return Kernel::NullKernel;
-					continue;
-				++j;
-				while (j < K.size())
-				{
-					W2 = E.intersect(K[j], K[j + 1]);
-					if (W2 != Vertex::NullVertex)
-					{
-						intIdx2 = j;
-						break;
-					}
-					++j;
-				}
+					Equation E(vertices[i], vertices[i + 1]);
 
-				K.cut(intIdx1, W1, intIdx2, W2, crossProduct(vertices[i], vertices[i + 1], K[0]) > 0);
+
+					Vertex W1, W2;
+					size_t j = 0, intIdx1 = 0, intIdx2 = 0;
+					while (j < K.size())
+					{
+						W1 = E.intersect(K[j], K[j + 1]);
+						if (W1 != Vertex::NullVertex)
+						{
+							intIdx1 = j;
+							break;
+						}
+						++j;
+					}
+					if (W1 == Vertex::NullVertex)
+						return Kernel::NullKernel;
+
+					++j;
+					while (j < K.size())
+					{
+						W2 = E.intersect(K[j], K[j + 1]);
+						if (W2 != Vertex::NullVertex)
+						{
+							intIdx2 = j;
+							break;
+						}
+						++j;
+					}
+
+					K.cut(intIdx1, W1, intIdx2, W2, crossProduct(vertices[i], vertices[i + 1], K[0]) > 0);
+				}
 			}
+
 			return K;
 		}
 
@@ -599,14 +624,12 @@ namespace geo
 			if (first == vertices.size()) // polygon is convex
 				return Kernel(vertices);
 
-			// - Lee & Preparata -
 			Kernel K(
 				Equation::toInfinite(vertices[first + 1], vertices[first]),
 				vertices[first],
 				Equation::toInfinite(vertices[first - 1], vertices[first])
 			);
 
-			std::cout << "Start: V" << first<<'\n';
 			for (size_t i = first + 1; vertices.mapIndex(i + 1) != first; ++i)
 			{
 				window.clear();
@@ -614,46 +637,42 @@ namespace geo
 				Equation E(vertices[i], vertices[i + 1]);
 				E.draw(window);
 				K.draw(window);
-				window.display();
 
-				//if (crossProduct(vertices[i], vertices[i + 1], K[0]) > 0)
-				//	continue;
+				if (!K.isToTheLeftOf(vertices[i], vertices[i + 1]))
+				{
+					Vertex W1, W2;
+					size_t j = 0, intIdx1 = 0, intIdx2 = 0;
+					while (j < K.size())
+					{
+						W1 = E.intersect(K[j], K[j + 1]);
+						if (W1 != Vertex::NullVertex)
+						{
+							intIdx1 = j;
+							break;
+						}
+						++j;
+					}
+					if (W1 == Vertex::NullVertex)
+						return Kernel::NullKernel;
 
-				Vertex W1, W2;
-				size_t j = 0, intIdx1 = 0, intIdx2 = 0;
-				while(j < K.size())
-				{
-					W1 = E.intersect(K[j], K[j + 1]);
-					if (W1 != Vertex::NullVertex)
-					{
-						intIdx1 = j;
-						std::cout << "W1 found between " << j << "-" << j + 1 << '\n';
-						break;
-					}
 					++j;
-				}
-				if (W1 == Vertex::NullVertex)
-					//return Kernel::NullKernel;
-					continue;
-				++j;
-				while (j < K.size())
-				{
-					std::cout << j << '\n';
-					W2 = E.intersect(K[j], K[j + 1]);
-					if (W2 != Vertex::NullVertex)
+					while (j < K.size())
 					{
-						intIdx2 = j;
-						std::cout << "W2 found between " << j << "-" << j + 1 << '\n';
-						break;	
+						W2 = E.intersect(K[j], K[j + 1]);
+						if (W2 != Vertex::NullVertex)
+						{
+							intIdx2 = j;
+							break;
+						}
+						++j;
 					}
-					++j;
+					W1.draw(window, 'c');
+					W2.draw(window, 'c');
+
+					K.cut(intIdx1, W1, intIdx2, W2, crossProduct(vertices[i], vertices[i + 1], K[0]) > 0);
 				}
-				std::cout << intIdx1 << " " << intIdx2 <<" "<<K.size()<< '\n';
-				W1.draw(window, 'c');
-				W2.draw(window, 's');
 				window.display();
 				pause(window);
-				K.cut(intIdx1, W1, intIdx2, W2, crossProduct(vertices[i], vertices[i + 1], K[0]) > 0);
 			}
 			return K;
 		}
@@ -704,7 +723,8 @@ namespace geo
 			if (vertices.size() < 3)
 				return;
 
-			const sf::Color color(255, 253, 210, 20);
+			const short a = 300 / vertices.size();
+			const sf::Color color(255, 253, 210, a > 0 ? a : 1);
 
 			sf::Vertex trig[3];
 			for (size_t i = 1; i < vertices.size() - 1; ++i)
@@ -758,10 +778,6 @@ namespace geo
 			}
 		}
 
-		inline static float crossProduct(const Vertex& v1, const Vertex& v2, const Vertex& v3)
-		{
-			return ((v2.x - v1.x) * (v3.y - v2.y) - (v3.x - v2.x) * (v2.y - v1.y));
-		}
 		inline static bool isReflex(const Vertex& v1, const Vertex& v2, const Vertex& v3)
 		{
 			return crossProduct(v1, v2, v3) > 0;
@@ -817,7 +833,7 @@ public:
 
 int main()
 {
-	sf::RenderWindow window(sf::VideoMode(WIN_WIDTH, WIN_HEIGHT), "Kernel of a polygon");
+	sf::RenderWindow window(sf::VideoMode(WIN_WIDTH, WIN_HEIGHT), "Kernel of a Polygon");
 	window.setFramerateLimit(60);
 
 	size_t selected = NAN;
@@ -826,7 +842,8 @@ int main()
 
 	DragNDropHelper _dragger;
 
-	bool modified = true, showLight = false;
+	bool modified = false, showLight = false;
+
 
 	while (window.isOpen())
 	{
@@ -839,7 +856,8 @@ int main()
 			{
 				if (selected != NAN)
 				{
-					inputPoly.setPosition(selected, static_cast<sf::Vector2f>(sf::Mouse::getPosition(window)));
+					const sf::Vector2f mPos = static_cast<sf::Vector2f>(sf::Mouse::getPosition(window));
+					inputPoly.setPosition(selected, mPos);
 					modified = true;
 				}
 			}
@@ -877,8 +895,15 @@ int main()
 				else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::I))
 				{
 					std::string temp = openFileDialog(window.getSystemHandle());
-					if (temp.size() && !inputPoly.load(temp))
-						std::cout << "Error reading file\n";
+					if (temp.size())
+					{
+						if(!inputPoly.load(temp))
+							std::cout << "Error reading file\n";
+						else
+						{
+							modified = true;
+						}
+					}
 				}
 				else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Key::L))
 				{
@@ -898,6 +923,16 @@ int main()
 						modified = true;
 					}
 				}
+				else if(sf::Keyboard::isKeyPressed(sf::Keyboard::Key::T))
+				{
+					inputPoly.clear();
+					for (float i = 0.0; i < 6.27; i += 0.02)
+					{
+						inputPoly.addVertex(geo::Vertex(500 + cos(i) * 450, 500 + sin(i) * 450));
+					}
+					inputPoly.addVertex(geo::Vertex(500, 500));
+					modified = true;
+				}
 			}
 		}
 
@@ -906,16 +941,20 @@ int main()
 			sf::Clock c;
 			kernel = inputPoly.getKernel();
 			sf::Time t = c.getElapsedTime();
-			std::cout << "Input size: " << inputPoly.size() << " Kernel size: " << kernel.size() << " Time: " << t.asMilliseconds() << "ms\n";
+			std::cout << "Input size: " << inputPoly.size() << "     Kernel size: " << kernel.size() << "     Time: " << static_cast<double>(t.asMicroseconds()) / 1000.0 << " ms\n";
 
 			modified = false;
+
+			if(inputPoly.wasNormalized)
+				selected = inputPoly.find(static_cast<sf::Vector2f>(sf::Mouse::getPosition(window)));
 		}
 
 		window.clear();
 		if(showLight)
 			inputPoly.drawRays(window);
 		inputPoly.draw(window);
-		kernel.draw(window);;
+		if(!showLight)
+			kernel.draw(window);;
 		window.display();
 	}
 
